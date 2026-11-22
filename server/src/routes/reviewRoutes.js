@@ -6,7 +6,7 @@
  * - POST /api/reviews/analyze   : Trigger batch analysis with caching & backoff
  * - POST /api/reviews/:id/reply : Generate customer reply on-demand
  * - GET  /api/reviews           : List reviews with optional filters
- * - GET  /api/reviews/stats     : Summary cards, top complaints/praises, and AI metrics
+ * - GET  /api/reviews/stats     : Summary cards, top insights, agreement %, and product breakdown
  */
 
 import express from 'express';
@@ -48,7 +48,7 @@ router.post('/analyze', async (req, res) => {
 
 /**
  * POST /api/reviews/:id/reply
- * Generates an empathetic customer support reply on-demand for a single review
+ * Generates an empathetic customer support reply on-demand for a single review (Feature 7E)
  */
 router.post('/:id/reply', async (req, res) => {
   try {
@@ -83,7 +83,7 @@ router.post('/:id/reply', async (req, res) => {
 
 /**
  * GET /api/reviews/stats
- * Aggregates dashboard summary cards, top complaints, top praises, and AI usage metrics
+ * Aggregates dashboard summary cards, top complaints, top praises, agreement %, and product insights
  */
 router.get('/stats', async (req, res) => {
   try {
@@ -127,16 +127,55 @@ router.get('/stats', async (req, res) => {
     ]);
     const totalHits = cacheHitSum.length > 0 ? cacheHitSum[0].totalHits : 0;
 
-    // Rating Mismatch Detection (Bonus): Flag reviews where star rating contradicts sentiment
-    // e.g. 5 stars with negative sentiment (R008), or 1-2 stars with positive sentiment
-    const mismatches = await Review.find({
+    // Rating Mismatch Detection & Agreement Percentage (Bonus Features 1 & 2):
+    // Compare star ratings (1-5) against AI sentiment:
+    // Agreement: (4-5 stars & positive) OR (3 stars & neutral) OR (1-2 stars & negative)
+    const allAnalyzedWithRating = await Review.find({
       analysisStatus: { $in: ['analyzed', 'cached'] },
       rating: { $ne: null },
-      $or: [
-        { rating: { $gte: 4 }, sentiment: 'negative' },
-        { rating: { $lte: 2 }, sentiment: 'positive' },
-      ],
-    }).select('reviewId product rating sentiment reviewText');
+    });
+
+    let agreedCount = 0;
+    const mismatches = [];
+
+    allAnalyzedWithRating.forEach((r) => {
+      const isPositiveAgreement = (r.rating >= 4 && r.sentiment === 'positive');
+      const isNeutralAgreement = (r.rating === 3 && r.sentiment === 'neutral');
+      const isNegativeAgreement = (r.rating <= 2 && r.sentiment === 'negative');
+
+      if (isPositiveAgreement || isNeutralAgreement || isNegativeAgreement) {
+        agreedCount++;
+      } else {
+        mismatches.push({
+          reviewId: r.reviewId,
+          product: r.product,
+          rating: r.rating,
+          sentiment: r.sentiment,
+          summary: r.summary,
+          reviewText: r.reviewText,
+        });
+      }
+    });
+
+    const totalRated = allAnalyzedWithRating.length;
+    const agreementPct = totalRated > 0 ? Math.round((agreedCount / totalRated) * 100) : 100;
+
+    // Product-wise insights (Bonus Feature 4)
+    const productBreakdown = await Review.aggregate([
+      { $match: { analysisStatus: { $in: ['analyzed', 'cached'] } } },
+      {
+        $group: {
+          _id: '$product',
+          totalReviews: { $sum: 1 },
+          avgRating: { $avg: '$rating' },
+          positiveCount: { $sum: { $cond: [{ $eq: ['$sentiment', 'positive'] }, 1, 0] } },
+          neutralCount: { $sum: { $cond: [{ $eq: ['$sentiment', 'neutral'] }, 1, 0] } },
+          negativeCount: { $sum: { $cond: [{ $eq: ['$sentiment', 'negative'] }, 1, 0] } },
+          needsReplyCount: { $sum: { $cond: [{ $eq: ['$needsReply', true] }, 1, 0] } },
+        },
+      },
+      { $sort: { totalReviews: -1 } },
+    ]);
 
     res.status(200).json({
       success: true,
@@ -159,9 +198,19 @@ router.get('/stats', async (req, res) => {
           totalReusedHits: totalHits,
         },
         ratingMismatches: {
+          agreementPct,
           count: mismatches.length,
           reviews: mismatches,
         },
+        productBreakdown: productBreakdown.map((p) => ({
+          product: p._id,
+          total: p.totalReviews,
+          avgRating: p.avgRating ? Number(p.avgRating.toFixed(1)) : null,
+          positive: p.positiveCount,
+          neutral: p.neutralCount,
+          negative: p.negativeCount,
+          needsReply: p.needsReplyCount,
+        })),
       },
     });
   } catch (error) {

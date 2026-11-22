@@ -6,6 +6,7 @@
  * - Visual sentiment distribution chart (Recharts)
  * - File upload and batch AI analysis triggers
  * - Top customer insights (complaints & praises)
+ * - Product breakdown & rating mismatch detection (Bonus features)
  * - Interactive multi-dimensional review table with search and filters
  * - On-demand customer support reply generation
  */
@@ -15,6 +16,7 @@ import Header from './components/Header';
 import UploadCard from './components/UploadCard';
 import SummaryCards from './components/SummaryCards';
 import InsightCards from './components/InsightCards';
+import ProductInsights from './components/ProductInsights';
 import FilterBar from './components/FilterBar';
 import ReviewTable from './components/ReviewTable';
 import Charts from './components/Charts';
@@ -144,6 +146,14 @@ export function App() {
           <div className="lg:col-span-1">
             <Charts stats={stats} />
           </div>
+        </section>
+
+        {/* Product Breakdown & Rating Mismatches (Bonus) */}
+        <section aria-label="Product Insights">
+          <ProductInsights
+            productBreakdown={stats?.productBreakdown || []}
+            ratingMismatches={stats?.ratingMismatches || {}}
+          />
         </section>
 
         {/* Filter Bar */}
