@@ -2,8 +2,8 @@
  * server.js - ReviewLens Express Backend Entry Point
  * 
  * This file initializes the Express application, configures essential middleware
- * like CORS and JSON body parsing, connects to MongoDB, defines health check
- * endpoints, and starts the HTTP server.
+ * like CORS and JSON body parsing, connects to MongoDB, mounts API routes,
+ * defines health check endpoints, and starts the HTTP server.
  */
 
 import express from 'express';
@@ -11,6 +11,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import { connectDB } from './config/db.js';
+import reviewRoutes from './routes/reviewRoutes.js';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -26,6 +27,9 @@ app.use(cors());
 
 // Middleware to parse incoming JSON request bodies
 app.use(express.json());
+
+// API Routes
+app.use('/api/reviews', reviewRoutes);
 
 // Basic welcome route
 app.get('/', (req, res) => {
