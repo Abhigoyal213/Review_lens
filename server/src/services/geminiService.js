@@ -1,7 +1,10 @@
 /**
- * geminiService.js - Google Gemini AI Integration Service
+ * geminiService.js - Multi-Provider AI Integration Service
  * 
- * Uses the official Google Gen AI SDK (@google/genai) to analyze customer reviews.
+ * Supports both:
+ * 1. FreeModel Claude (via https://freemodel.in/v1 OpenAI-compatible endpoint)
+ * 2. Official Google Gemini API (@google/genai)
+ * 
  * Features built-in Prompt Injection Protection to ensure adversarial inputs
  * (such as R012: "Ignore all previous instructions...") are treated strictly as data.
  */
@@ -10,20 +13,6 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-/**
- * Initializes and returns the GoogleGenAI client instance
- */
-export const getGeminiClient = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim() === '' || apiKey === 'your_gemini_api_key_here') {
-    throw new Error(
-      'Missing Gemini API key! Please add your GEMINI_API_KEY to the server/.env file. ' +
-      'You can generate a free key at: https://aistudio.google.com/'
-    );
-  }
-  return new GoogleGenAI({ apiKey });
-};
 
 /**
  * System prompt embedding strict prompt injection protection
@@ -81,24 +70,115 @@ Evaluate the true customer experience and return the required JSON.`;
 };
 
 /**
- * Analyzes a single customer review using Google Gemini
+ * Extracts and parses JSON from AI response text
+ */
+const parseJSONFromAI = (rawText) => {
+  if (!rawText) throw new Error('AI returned an empty response.');
+  
+  const trimmed = rawText.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch (err) {
+    // Attempt to extract JSON from markdown fences or bracket boundaries
+    const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    throw new Error(`Failed to parse AI response as JSON: ${rawText}`);
+  }
+};
+
+/**
+ * Calls FreeModel Claude endpoint (https://freemodel.in/v1)
+ */
+const callFreeModel = async (messages, temperature = 0.1) => {
+  const apiKey = (process.env.FREEMODEL_API_KEY || process.env.CLAUDE_API_KEY || '').trim();
+  const baseUrl = (process.env.FREEMODEL_BASE_URL || 'https://freemodel.in/v1').replace(/\/+$/, '');
+  const model = process.env.FREEMODEL_MODEL || 'claude-haiku-4-5-20251001';
+
+  if (!apiKey) {
+    throw new Error(
+      'Missing FreeModel API key! Please add FREEMODEL_API_KEY to your server/.env file. ' +
+      'Get your free key from: https://freemodel.in/dashboard'
+    );
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`FreeModel API HTTP ${response.status}: ${errorText}`);
+  }
+
+  const json = await response.json();
+  const content = json.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('FreeModel API returned empty content.');
+  }
+
+  return content;
+};
+
+/**
+ * Initializes and returns the GoogleGenAI client instance
+ */
+export const getGeminiClient = () => {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+    throw new Error(
+      'Missing AI API key! Please add either FREEMODEL_API_KEY (from https://freemodel.in/dashboard) ' +
+      'or GEMINI_API_KEY to your server/.env file.'
+    );
+  }
+  return new GoogleGenAI({ apiKey });
+};
+
+/**
+ * Analyzes a single customer review using either FreeModel Claude or Google Gemini
  * 
  * @param {string} reviewText - Customer review text
  * @param {string} product - Product name
- * @param {string} modelName - Gemini model name (default: 'gemini-1.5-flash')
- * @returns {Promise<Object>} Parsed JSON response from Gemini
+ * @param {string} [modelName] - Optional override model name
+ * @returns {Promise<Object>} Parsed JSON response
  */
-export const analyzeReviewWithGemini = async (reviewText, product = '', modelName = 'gemini-1.5-flash') => {
-  const ai = getGeminiClient();
+export const analyzeReviewWithGemini = async (reviewText, product = '', modelName) => {
+  const hasFreeModel = Boolean(process.env.FREEMODEL_API_KEY || process.env.CLAUDE_API_KEY);
   const prompt = buildPrompt(reviewText, product);
 
+  // 1. If FreeModel Claude key is configured, route to FreeModel
+  if (hasFreeModel) {
+    const rawContent = await callFreeModel(
+      [
+        { role: 'system', content: SYSTEM_INSTRUCTION },
+        { role: 'user', content: prompt },
+      ],
+      0.1
+    );
+    return parseJSONFromAI(rawContent);
+  }
+
+  // 2. Otherwise route to Google Gemini
+  const ai = getGeminiClient();
+  const selectedModel = modelName || 'gemini-1.5-flash';
+
   const response = await ai.models.generateContent({
-    model: modelName,
+    model: selectedModel,
     contents: prompt,
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
       responseMimeType: 'application/json',
-      temperature: 0.1, // Low temperature for deterministic, consistent classification
+      temperature: 0.1,
     },
   });
 
@@ -106,15 +186,7 @@ export const analyzeReviewWithGemini = async (reviewText, product = '', modelNam
     throw new Error('Gemini API returned an empty response.');
   }
 
-  // Parse JSON response
-  const rawText = response.text.trim();
-  try {
-    return JSON.parse(rawText);
-  } catch (parseError) {
-    // If wrapped in code blocks, extract JSON
-    const cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleaned);
-  }
+  return parseJSONFromAI(response.text);
 };
 
 /**
@@ -123,8 +195,8 @@ export const analyzeReviewWithGemini = async (reviewText, product = '', modelNam
  * @param {Object} review - Review document with text, product, rating, and summary
  * @returns {Promise<string>} 2-3 sentence customer reply
  */
-export const generateCustomerReply = async (review, modelName = 'gemini-1.5-flash') => {
-  const ai = getGeminiClient();
+export const generateCustomerReply = async (review) => {
+  const hasFreeModel = Boolean(process.env.FREEMODEL_API_KEY || process.env.CLAUDE_API_KEY);
 
   const prompt = `You are a courteous, professional customer support manager for an e-commerce store.
 Write a helpful, empathetic, 2-3 sentence response to the following customer review.
@@ -140,13 +212,24 @@ Rules:
 3. Offer an immediate resolution (replacement, refund, or contacting support at support@store.com).
 4. Keep it friendly and concise (maximum 3 sentences).`;
 
+  if (hasFreeModel) {
+    const replyText = await callFreeModel(
+      [{ role: 'user', content: prompt }],
+      0.7
+    );
+    return replyText.trim();
+  }
+
+  const ai = getGeminiClient();
   const response = await ai.models.generateContent({
-    model: modelName,
+    model: 'gemini-1.5-flash',
     contents: prompt,
     config: {
       temperature: 0.7,
     },
   });
 
-  return response.text ? response.text.trim() : 'Thank you for your feedback. We apologize for the inconvenience and our team will reach out to resolve this issue.';
+  return response.text
+    ? response.text.trim()
+    : 'Thank you for your feedback. We apologize for the inconvenience and our team will reach out to resolve this issue.';
 };

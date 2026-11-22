@@ -222,11 +222,19 @@ Copy `.env.example` into `server/.env`:
 ```bash
 cp .env.example server/.env
 ```
-Open `server/.env` and enter your Gemini API key:
+Open `server/.env` and paste your API key. ReviewLens supports both **FreeModel Claude** (from https://freemodel.in/dashboard) and **Google Gemini**:
+
 ```env
 PORT=5000
 MONGODB_URI=mongodb://localhost:27017/reviewlens
-GEMINI_API_KEY=your_actual_gemini_api_key_here
+
+# Option 1: FreeModel Claude API (from https://freemodel.in/dashboard)
+FREEMODEL_API_KEY=your_freemodel_api_key_here
+FREEMODEL_BASE_URL=https://freemodel.in/v1
+FREEMODEL_MODEL=claude-haiku-4-5-20251001
+
+# Option 2: Google Gemini API Key (from https://aistudio.google.com/)
+GEMINI_API_KEY=
 ```
 
 ### 3. Backend Setup & Startup
