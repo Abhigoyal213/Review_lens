@@ -11,6 +11,9 @@ node_modules/
 dist/
 build/
 
+# Database storage
+.mongodb_data/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

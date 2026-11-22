@@ -2,13 +2,15 @@
  * server.js - ReviewLens Express Backend Entry Point
  * 
  * This file initializes the Express application, configures essential middleware
- * like CORS and JSON body parsing, loads environment variables, defines basic
- * health check endpoints, and starts the HTTP server.
+ * like CORS and JSON body parsing, connects to MongoDB, defines health check
+ * endpoints, and starts the HTTP server.
  */
 
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import mongoose from 'mongoose';
+import { connectDB } from './config/db.js';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -34,11 +36,15 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check endpoint - used to verify the server is running and healthy
+// Health check endpoint - reports server and database connection health
 app.get('/api/health', (req, res) => {
+  // MongoDB readyState: 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  
   res.status(200).json({
     status: 'healthy',
     uptime: process.uptime(),
+    database: dbStatus,
     timestamp: new Date().toISOString()
   });
 });
@@ -59,9 +65,19 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start listening for incoming requests
-app.listen(PORT, () => {
-  console.log(`ReviewLens backend server is running on http://localhost:${PORT}`);
-});
+// Start database connection and then start HTTP server
+const startServer = async () => {
+  try {
+    await connectDB();
+  } catch (error) {
+    console.warn('⚠️ Warning: Server starting without MongoDB connection. Re-check MongoDB service if needed.');
+  }
+
+  app.listen(PORT, () => {
+    console.log(`ReviewLens backend server is running on http://localhost:${PORT}`);
+  });
+};
+
+startServer();
 
 export default app;
