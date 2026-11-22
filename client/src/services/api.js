@@ -8,7 +8,7 @@ import axios from 'axios';
 
 // Create configured Axios instance
 const API = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_URL || '/api',
   timeout: 60000, // 60s timeout for large CSV uploads or AI batch operations
 });
 
