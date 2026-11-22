@@ -26,12 +26,25 @@ export const executeWithExponentialBackoff = async (
     } catch (error) {
       attempt++;
 
+      const statusNum = Number(error.status) || Number(error.code) || 0;
+      const errorMsg = (error.message || '') + ' ' + (typeof error === 'string' ? error : JSON.stringify(error));
+
       const isRateLimit =
-        error.status === 429 ||
-        (error.message && (error.message.includes('429') || error.message.includes('quota') || error.message.includes('Resource has been exhausted')));
+        statusNum === 429 ||
+        error.status === 'RESOURCE_EXHAUSTED' ||
+        errorMsg.includes('429') ||
+        errorMsg.includes('quota') ||
+        errorMsg.includes('Resource has been exhausted');
+
       const isServerError =
-        error.status >= 500 ||
-        (error.message && (error.message.includes('500') || error.message.includes('503')));
+        statusNum >= 500 ||
+        statusNum === 503 ||
+        error.status === 'UNAVAILABLE' ||
+        errorMsg.includes('500') ||
+        errorMsg.includes('503') ||
+        errorMsg.includes('UNAVAILABLE') ||
+        errorMsg.includes('high demand') ||
+        errorMsg.includes('overloaded');
 
       const isTransient = isRateLimit || isServerError;
 

@@ -13,6 +13,7 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { executeWithExponentialBackoff } from '../utils/retryHelper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -201,17 +202,40 @@ export const analyzeReviewWithGemini = async (reviewText, product = '', modelNam
 
   // Provider 2: Google Gemini (Default)
   const ai = getGeminiClient();
-  const selectedModel = modelName || process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const primaryModel = modelName || process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const fallbackModel = 'gemini-3.5-flash-lite';
 
-  const response = await ai.models.generateContent({
-    model: selectedModel,
-    contents: prompt,
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      responseMimeType: 'application/json',
-      temperature: 0.1,
-    },
-  });
+  const callGeminiModel = async (modelToUse) => {
+    return await ai.models.generateContent({
+      model: modelToUse,
+      contents: prompt,
+      config: {
+        systemInstruction: SYSTEM_INSTRUCTION,
+        responseMimeType: 'application/json',
+        temperature: 0.1,
+      },
+    });
+  };
+
+  let response;
+  try {
+    response = await callGeminiModel(primaryModel);
+  } catch (err) {
+    const errorMsg = (err.message || '') + ' ' + (typeof err === 'string' ? err : JSON.stringify(err));
+    const isOverloaded =
+      err.status === 503 ||
+      err.status === 'UNAVAILABLE' ||
+      errorMsg.includes('503') ||
+      errorMsg.includes('high demand') ||
+      errorMsg.includes('UNAVAILABLE');
+
+    if (isOverloaded && primaryModel !== fallbackModel) {
+      console.warn(`⚠️ Model ${primaryModel} is experiencing high demand (503). Automatically switching to ${fallbackModel}...`);
+      response = await callGeminiModel(fallbackModel);
+    } else {
+      throw err;
+    }
+  }
 
   if (!response || !response.text) {
     throw new Error('Gemini API returned an empty response.');
@@ -243,25 +267,62 @@ Rules:
 3. Offer an immediate resolution (replacement, refund, or contacting support at support@store.com).
 4. Keep it friendly and concise (maximum 3 sentences).`;
 
-  if (provider === 'claude') {
-    const replyText = await callFreeModel(
-      [{ role: 'user', content: prompt }],
-      0.7
-    );
-    return replyText.trim();
+  try {
+    return await executeWithExponentialBackoff(async () => {
+      if (provider === 'claude') {
+        const replyText = await callFreeModel(
+          [{ role: 'user', content: prompt }],
+          0.7
+        );
+        return replyText.trim();
+      }
+
+      const ai = getGeminiClient();
+      const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+      const fallbackModel = 'gemini-3.5-flash-lite';
+
+      try {
+        const response = await ai.models.generateContent({
+          model: primaryModel,
+          contents: prompt,
+          config: {
+            temperature: 0.7,
+          },
+        });
+
+        if (response && response.text) {
+          return response.text.trim();
+        }
+      } catch (err) {
+        const errorMsg = (err.message || '') + ' ' + (typeof err === 'string' ? err : JSON.stringify(err));
+        const isOverloaded =
+          err.status === 503 ||
+          err.status === 'UNAVAILABLE' ||
+          errorMsg.includes('503') ||
+          errorMsg.includes('high demand') ||
+          errorMsg.includes('UNAVAILABLE');
+
+        if (isOverloaded) {
+          console.warn(`⚠️ Model ${primaryModel} busy (503). Retrying reply with ${fallbackModel}...`);
+          const fallbackResponse = await ai.models.generateContent({
+            model: fallbackModel,
+            contents: prompt,
+            config: {
+              temperature: 0.7,
+            },
+          });
+          if (fallbackResponse && fallbackResponse.text) {
+            return fallbackResponse.text.trim();
+          }
+        }
+        throw err;
+      }
+
+      return `Thank you for reaching out regarding your ${review.product || 'order'}. We sincerely apologize for the inconvenience and our team will resolve this promptly at support@store.com.`;
+    }, 3, 1000);
+  } catch (error) {
+    console.warn('⚠️ All AI reply attempts encountered transient error, using empathetic template reply:', error.message);
+    // Graceful fallback reply guaranteeing the UI and customer always receive a helpful response
+    return `Thank you for sharing your feedback regarding your ${review.product || 'purchase'}. We are truly sorry to hear about this issue. Please reach out directly to support@store.com so our team can arrange a complimentary replacement or full refund right away.`;
   }
-
-  const ai = getGeminiClient();
-  const selectedModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
-  const response = await ai.models.generateContent({
-    model: selectedModel,
-    contents: prompt,
-    config: {
-      temperature: 0.7,
-    },
-  });
-
-  return response.text
-    ? response.text.trim()
-    : 'Thank you for your feedback. We apologize for the inconvenience and our team will reach out to resolve this issue.';
 };
