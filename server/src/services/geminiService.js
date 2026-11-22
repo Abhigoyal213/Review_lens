@@ -201,7 +201,7 @@ export const analyzeReviewWithGemini = async (reviewText, product = '', modelNam
 
   // Provider 2: Google Gemini (Default)
   const ai = getGeminiClient();
-  const selectedModel = modelName || process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  const selectedModel = modelName || process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 
   const response = await ai.models.generateContent({
     model: selectedModel,
@@ -252,7 +252,7 @@ Rules:
   }
 
   const ai = getGeminiClient();
-  const selectedModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  const selectedModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
   const response = await ai.models.generateContent({
     model: selectedModel,
     contents: prompt,
